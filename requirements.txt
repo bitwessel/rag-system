@@ -1,0 +1,10 @@
+llama-index-core>=0.10,<0.12
+llama-index-vector-stores-chroma>=0.5,<0.7
+chromadb>=0.5,<0.6
+openai>=1.40,<2.0
+python-dotenv>=1.0
+click>=8.1
+pinecone-client>=3.0
+weaviate-client>=4.0
+beautifulsoup4>=4.12
+pypdf>=4.0

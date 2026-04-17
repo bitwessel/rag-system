@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Read(//c/msys64/ucrt64/bin/**)",
+      "Bash(winget list *)",
+      "Bash(/c/Users/wesso/AppData/Local/Programs/Python/Python312/python.exe --version)",
+      "Bash(/c/Users/wesso/AppData/Local/Programs/Python/Python312/python.exe -m pip --version)",
+      "Bash(cargo --version)",
+      "Bash(rustup --version)",
+      "Bash(winget upgrade *)",
+      "Bash(rustup update *)",
+      "Bash(rm -rf venv)",
+      "Bash(/c/Users/wesso/AppData/Local/Programs/Python/Python312/python.exe -m venv venv)",
+      "Bash(venv/Scripts/python.exe --version)",
+      "Bash(venv/Scripts/pip.exe --version)"
+    ]
+  }
+}
