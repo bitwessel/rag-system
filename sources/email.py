@@ -259,11 +259,13 @@ class EmailSource:
             "date": date,
             "folder": folder,
         }
+        all_keys = list(meta.keys())
         return Document(
             text=text,
             doc_id=message_id,
             metadata=meta,
-            excluded_embed_metadata_keys=list(meta.keys()),
+            excluded_embed_metadata_keys=all_keys,
+            excluded_llm_metadata_keys=all_keys,
         )
 
     @staticmethod

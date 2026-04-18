@@ -23,7 +23,7 @@ from sources.base import DataSource
 def _build_llm() -> LLM:
     if config.LLM_SOURCE == "ollama":
         from llama_index.llms.ollama import Ollama
-        return Ollama(model=config.OLLAMA_LLM_MODEL, base_url=config.OLLAMA_BASE_URL, request_timeout=120.0)
+        return Ollama(model=config.OLLAMA_LLM_MODEL, base_url=config.OLLAMA_BASE_URL, request_timeout=300.0, context_window=4096)
     from core.llm import OpenRouterLLM
     return OpenRouterLLM()
 
@@ -152,26 +152,38 @@ class RAGPipeline:
         embeddings_ordered: list = [None] * len(nodes)
         embed_start = time.monotonic()
         completed = 0
+        failed = 0
+        # 400 chars at ~3 chars/BERT-token worst-case ≈ 133 tokens, safely under
+        # all-minilm's 256-token limit regardless of language or text density.
+        _MAX = 400
         with tqdm(total=len(nodes), desc="Embedding chunks", unit="chunk") as pbar:
             with ThreadPoolExecutor(max_workers=config.EMBED_CONCURRENCY) as executor:
                 future_to_idx = {
-                    executor.submit(self.embed_model.get_text_embedding, text): idx
+                    executor.submit(self.embed_model.get_text_embedding, text[:_MAX]): idx
                     for idx, text in enumerate(texts)
                 }
                 for future in as_completed(future_to_idx):
                     idx = future_to_idx[future]
-                    embeddings_ordered[idx] = future.result()
+                    try:
+                        embeddings_ordered[idx] = future.result()
+                    except Exception as exc:
+                        tqdm.write(f"[pipeline] Warning: chunk {idx} embed failed ({exc}), skipping")
+                        failed += 1
                     completed += 1
                     avg = completed / (time.monotonic() - embed_start)
-                    pbar.set_postfix(avg=f"{avg:.2f} chunk/s", refresh=False)
+                    pbar.set_postfix(avg=f"{avg:.2f} chunk/s", failed=failed, refresh=False)
                     pbar.update(1)
 
-        for node, emb in zip(nodes, embeddings_ordered):
+        if failed:
+            tqdm.write(f"[pipeline] {failed} chunk(s) skipped due to embed errors")
+
+        valid = [(n, e) for n, e in zip(nodes, embeddings_ordered) if e is not None]
+        for node, emb in valid:
             node.embedding = emb
 
         # Phase B: single bulk insert — ChromaDB builds HNSW index exactly once
         tqdm.write("[pipeline] Bulk-inserting into vector store...")
-        index.insert_nodes(nodes)
+        index.insert_nodes([n for n, _ in valid])
         cache_path.unlink(missing_ok=True)
 
         elapsed = time.monotonic() - t_start
