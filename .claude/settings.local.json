@@ -13,7 +13,25 @@
       "Bash(rm -rf venv)",
       "Bash(/c/Users/wesso/AppData/Local/Programs/Python/Python312/python.exe -m venv venv)",
       "Bash(venv/Scripts/python.exe --version)",
-      "Bash(venv/Scripts/pip.exe --version)"
+      "Bash(venv/Scripts/pip.exe --version)",
+      "Bash(pip install *)",
+      "Bash(python -m pip install llama-index-llms-ollama llama-index-embeddings-ollama)",
+      "Read(//usr/**)",
+      "Read(//usr/local/**)",
+      "Bash(ls /c/Python*/python.exe)",
+      "Bash(cmd.exe /c \"where python\")",
+      "Bash(/c/Python311/python.exe -m pip install llama-index-llms-ollama llama-index-embeddings-ollama)",
+      "Bash(/c/Python311/python.exe -c \"from llama_index.llms.ollama import Ollama; from llama_index.embeddings.ollama import OllamaEmbedding; print\\('OK'\\)\")",
+      "Bash(/c/Python311/python.exe -m pip install llama-index-llms-ollama llama-index-embeddings-ollama --force-reinstall --no-deps)",
+      "Bash(/c/Python311/python.exe -c \"from llama_index.llms.ollama import Ollama; from llama_index.embeddings.ollama import OllamaEmbedding; print\\('imports OK'\\)\")",
+      "Bash(/c/Python311/python.exe -m pip install ollama --force-reinstall --no-deps)",
+      "Bash(cmd.exe /c \"python -c \\\\\"import llama_index; print\\('llama_index found'\\)\\\\\"\")",
+      "Bash(cmd.exe /c \"py -3 -c \\\\\"import llama_index; print\\('found', llama_index.__version__\\)\\\\\"\")",
+      "Bash(cmd.exe /c \"py -3 -m pip list 2>&1 | findstr llama\")",
+      "Read(//c/Python311/Lib/site-packages//**)",
+      "Bash(/c/Python311/python.exe -m venv /c/projects/rag-system/.venv)",
+      "Bash(/c/projects/rag-system/.venv/Scripts/pip.exe install *)",
+      "Bash(/c/projects/rag-system/.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

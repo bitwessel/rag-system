@@ -17,8 +17,14 @@ from typing import Any, Iterable
 
 from bs4 import BeautifulSoup
 from llama_index.core import Document
+from tqdm import tqdm
 
-DEFAULT_IMAP_FOLDERS: tuple[str, ...] = ("INBOX", "[Gmail]/Sent Mail", "Sent")
+DEFAULT_IMAP_FOLDERS: tuple[str, ...] = (
+    "INBOX",
+    "[Gmail]/Sent Mail",
+    "[Gmail]/Verzonden berichten",
+    "Sent",
+)
 
 
 class EmailSource:
@@ -30,31 +36,51 @@ class EmailSource:
         self,
         mbox: str | None = None,
         imap: dict[str, Any] | None = None,
+        skip_ids: set[str] | frozenset[str] | None = None,
         **_: Any,
     ) -> list[Document]:
         if mbox and imap:
             raise ValueError("Pass either `mbox` or `imap`, not both.")
         if mbox:
-            return self.load_from_mbox(mbox)
+            return self.load_from_mbox(mbox, skip_ids=skip_ids)
         if imap:
-            return self.load_from_imap(**imap)
+            return self.load_from_imap(**imap, skip_ids=skip_ids)
         raise ValueError("EmailSource.load requires `mbox=...` or `imap={...}`.")
 
     # ----- mbox ---------------------------------------------------------------
 
-    def load_from_mbox(self, path: str) -> list[Document]:
+    def load_from_mbox(
+        self,
+        path: str,
+        skip_ids: set[str] | frozenset[str] | None = None,
+    ) -> list[Document]:
         box = mailbox.mbox(path)
+        messages = list(box)
         seen: set[str] = set()
         docs: list[Document] = []
-        for msg in box:
+        for msg in tqdm(messages, desc="Reading mbox", unit="msg"):
             doc = self._build_doc(msg, folder="mbox")
             if doc.doc_id in seen:
+                continue
+            if skip_ids and doc.doc_id in skip_ids:
+                seen.add(doc.doc_id)
                 continue
             seen.add(doc.doc_id)
             docs.append(doc)
         return docs
 
     # ----- IMAP ---------------------------------------------------------------
+
+    def list_imap_folders(self, host: str, user: str, password: str) -> list[str]:
+        """Return sorted list of all folders visible on the IMAP server."""
+        with imaplib.IMAP4_SSL(host) as conn:
+            conn.login(user, password)
+            folders = self._list_folders(conn)
+            conn.logout()
+        return sorted(folders)
+
+    _HEADER_BATCH = 500   # IDs per BODY[HEADER] round trip (lightweight)
+    _RFC822_BATCH = 100   # IDs per RFC822 round trip
 
     def load_from_imap(
         self,
@@ -63,46 +89,119 @@ class EmailSource:
         password: str,
         folders: Iterable[str] = DEFAULT_IMAP_FOLDERS,
         limit: int | None = None,
+        save_mbox: str | None = None,
+        skip_ids: set[str] | frozenset[str] | None = None,
     ) -> list[Document]:
         docs: list[Document] = []
         seen: set[str] = set()
+        mbox_writer = mailbox.mbox(save_mbox, create=True) if save_mbox else None
         with imaplib.IMAP4_SSL(host) as conn:
             conn.login(user, password)
+            tqdm.write(f"[email] Logged in as {user}")
             available_folders = self._list_folders(conn)
+            _printed_available = False
             for folder in folders:
                 if folder not in available_folders:
+                    if not _printed_available:
+                        tqdm.write(
+                            f"[email] Available folders: {', '.join(sorted(available_folders))}"
+                        )
+                        _printed_available = True
+                    tqdm.write(f"[email] Skipping '{folder}' (not found on server)")
                     continue
                 typ, _ = conn.select(f'"{folder}"', readonly=True)
                 if typ != "OK":
+                    tqdm.write(f"[email] Could not select '{folder}', skipping")
                     continue
                 typ, data = conn.search(None, "ALL")
                 if typ != "OK" or not data or not data[0]:
+                    tqdm.write(f"[email] No messages in '{folder}'")
                     continue
                 ids = data[0].split()
                 if limit is not None:
                     ids = ids[-limit:]
-                for num in ids:
-                    typ, msg_data = conn.fetch(num, "(RFC822)")
-                    if typ != "OK" or not msg_data:
-                        continue
-                    raw = next(
-                        (
-                            part[1]
-                            for part in msg_data
-                            if isinstance(part, tuple) and len(part) >= 2
-                        ),
-                        None,
+
+                # Pre-scan Message-ID headers to skip already-indexed messages.
+                if skip_ids:
+                    tqdm.write(
+                        f"[email] Pre-scanning {len(ids)} header(s) in '{folder}' "
+                        f"to skip already-indexed messages..."
                     )
-                    if not raw:
-                        continue
-                    msg = stdlib_email.message_from_bytes(raw)
-                    doc = self._build_doc(msg, folder=folder)
-                    if doc.doc_id in seen:
-                        continue
-                    seen.add(doc.doc_id)
-                    docs.append(doc)
+                    seq_to_mid = self._fetch_message_ids(conn, ids, self._HEADER_BATCH)
+                    before = len(ids)
+                    ids = [
+                        num for num in ids
+                        if seq_to_mid.get(num, "\x00") not in skip_ids
+                    ]
+                    skipped = before - len(ids)
+                    if skipped:
+                        tqdm.write(
+                            f"[email] Skipping {skipped} already-indexed message(s) "
+                            f"in '{folder}'"
+                        )
+
+                if not ids:
+                    tqdm.write(f"[email] Nothing new in '{folder}'")
+                    continue
+
+                tqdm.write(f"[email] Fetching '{folder}': {len(ids)} message(s)")
+                with tqdm(total=len(ids), desc=f"  {folder}", unit="msg", leave=True) as pbar:
+                    for i in range(0, len(ids), self._RFC822_BATCH):
+                        batch = ids[i : i + self._RFC822_BATCH]
+                        seq = ",".join(n.decode() for n in batch)
+                        typ, msg_data = conn.fetch(seq, "(RFC822)")
+                        if typ != "OK" or not msg_data:
+                            pbar.update(len(batch))
+                            continue
+                        for part in msg_data:
+                            if not isinstance(part, tuple) or len(part) < 2:
+                                continue
+                            raw = part[1]
+                            if not isinstance(raw, (bytes, bytearray)):
+                                continue
+                            if mbox_writer is not None:
+                                mbox_writer.add(mailbox.mboxMessage(raw))
+                            msg = stdlib_email.message_from_bytes(raw)
+                            doc = self._build_doc(msg, folder=folder)
+                            if doc.doc_id in seen:
+                                continue
+                            seen.add(doc.doc_id)
+                            docs.append(doc)
+                        pbar.update(len(batch))
             conn.logout()
+        if mbox_writer is not None:
+            mbox_writer.flush()
+            mbox_writer.close()
+            tqdm.write(f"[email] Messages saved to {save_mbox}")
+        tqdm.write(f"[email] Fetch complete: {len(docs)} unique message(s) loaded")
         return docs
+
+    @staticmethod
+    def _fetch_message_ids(
+        conn: imaplib.IMAP4_SSL,
+        ids: list[bytes],
+        batch_size: int,
+    ) -> dict[bytes, str]:
+        """Batch-fetch Message-ID headers. Returns {imap_seq_bytes: message_id_str}."""
+        result: dict[bytes, str] = {}
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i : i + batch_size]
+            seq = ",".join(n.decode() for n in batch)
+            typ, data = conn.fetch(seq, "(BODY[HEADER.FIELDS (MESSAGE-ID)])")
+            if typ != "OK" or not data:
+                continue
+            for part in data:
+                if not isinstance(part, tuple) or len(part) < 2:
+                    continue
+                info, header_bytes = part[0], part[1]
+                if not isinstance(info, bytes) or not isinstance(header_bytes, (bytes, bytearray)):
+                    continue
+                seq_num = info.split()[0]  # e.g. b'42'
+                msg = stdlib_email.message_from_bytes(header_bytes)
+                mid = str(make_header(decode_header(msg.get("Message-Id", "")))).strip()
+                if mid:
+                    result[seq_num] = mid
+        return result
 
     @staticmethod
     def _list_folders(conn: imaplib.IMAP4_SSL) -> set[str]:
@@ -113,10 +212,18 @@ class EmailSource:
         for entry in data:
             if not entry:
                 continue
-            decoded = entry.decode("utf-8", errors="replace")
-            # Format: (\HasNoChildren) "/" "INBOX"
-            if '"' in decoded:
-                names.add(decoded.rsplit('"', 2)[-2])
+            decoded = entry.decode("utf-8", errors="replace").strip()
+            # IMAP LIST: (attributes) "sep" mailbox-name  — name may be quoted or not
+            if decoded.endswith('"'):
+                # Quoted name: extract between the last pair of quotes
+                last = decoded.rfind('"', 0, len(decoded) - 1)
+                if last >= 0:
+                    names.add(decoded[last + 1 : -1])
+            else:
+                # Unquoted name: last whitespace-separated token
+                parts = decoded.rsplit(None, 1)
+                if len(parts) == 2:
+                    names.add(parts[-1])
         return names
 
     # ----- shared -------------------------------------------------------------
@@ -142,19 +249,21 @@ class EmailSource:
             f"Folder: {folder}\n\n"
             f"{body}"
         )
+        meta = {
+            "source_type": "email",
+            "message_id": message_id,
+            "subject": subject,
+            "from_addr": from_addr,
+            "from_name": from_name,
+            "to_addr": to_addr,
+            "date": date,
+            "folder": folder,
+        }
         return Document(
             text=text,
             doc_id=message_id,
-            metadata={
-                "source_type": "email",
-                "message_id": message_id,
-                "subject": subject,
-                "from_addr": from_addr,
-                "from_name": from_name,
-                "to_addr": to_addr,
-                "date": date,
-                "folder": folder,
-            },
+            metadata=meta,
+            excluded_embed_metadata_keys=list(meta.keys()),
         )
 
     @staticmethod

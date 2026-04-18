@@ -19,6 +19,11 @@ import click
 import config
 from config import ConfigError
 
+# stdout encoding fix for Windows terminals that default to cp1252
+if sys.stdout.encoding and sys.stdout.encoding.lower().startswith("cp"):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
 
 def _die(msg: str, *, debug: bool = False) -> None:
     click.echo(f"Error: {msg}", err=True)
@@ -62,6 +67,13 @@ def ingest() -> None:
               help="Max messages per folder (newest first). Omit for all.")
 @click.option("--collection", default=None,
               help="Override the ChromaDB collection name. Default: 'emails'.")
+@click.option("--fresh", is_flag=True,
+              help="Drop the existing collection before ingesting (full re-index).")
+@click.option("--list-folders", "list_folders_only", is_flag=True,
+              help="Print available IMAP folders and exit (no ingestion).")
+@click.option("--save-mbox", default=None, type=click.Path(),
+              help="Save all fetched IMAP messages to this .mbox file. "
+                   "Useful for resuming without re-fetching if embedding fails.")
 @click.pass_context
 def ingest_email(
     ctx: click.Context,
@@ -73,20 +85,43 @@ def ingest_email(
     folders: tuple[str, ...],
     limit: int | None,
     collection: str | None,
+    fresh: bool,
+    list_folders_only: bool,
+    save_mbox: str | None,
 ) -> None:
     """Ingest emails from an mbox file or an IMAP server."""
     debug = ctx.obj.get("debug", False)
-    if bool(mbox) == bool(use_imap):
+    if list_folders_only and not use_imap:
+        _die("--list-folders requires --imap.", debug=debug)
+    if not list_folders_only and bool(mbox) == bool(use_imap):
         _die("Specify exactly one of --mbox PATH or --imap.", debug=debug)
 
     try:
         from core.pipeline import RAGPipeline
         from sources.email import EmailSource
 
-        pipeline = RAGPipeline(EmailSource(), collection_name=collection)
+        source = EmailSource()
+
+        if list_folders_only:
+            resolved_host = host or config.IMAP_HOST
+            resolved_user = user or config.IMAP_USER
+            resolved_pw = password or config.IMAP_PASSWORD
+            if not resolved_host:
+                _die("IMAP host not provided. Pass --host or set IMAP_HOST in .env.", debug=debug)
+            if not resolved_user:
+                _die("IMAP user not provided. Pass --user or set IMAP_USER in .env.", debug=debug)
+            if not resolved_pw:
+                resolved_pw = click.prompt("IMAP password", hide_input=True)
+            available = source.list_imap_folders(resolved_host, resolved_user, resolved_pw)
+            click.echo("Available IMAP folders:")
+            for f in available:
+                click.echo(f"  {f}")
+            return
+
+        pipeline = RAGPipeline(source, collection_name=collection)
 
         if mbox:
-            count = pipeline.ingest(mbox=mbox)
+            count = pipeline.ingest(mbox=mbox, fresh=fresh)
         else:
             resolved_host = host or config.IMAP_HOST
             resolved_user = user or config.IMAP_USER
@@ -108,7 +143,9 @@ def ingest_email(
                 imap_kwargs["folders"] = list(folders)
             if limit is not None:
                 imap_kwargs["limit"] = limit
-            count = pipeline.ingest(imap=imap_kwargs)
+            if save_mbox:
+                imap_kwargs["save_mbox"] = save_mbox
+            count = pipeline.ingest(imap=imap_kwargs, fresh=fresh)
 
         click.echo(f"Ingested {count} new email(s) into '{pipeline.collection_name}'.")
 
@@ -125,8 +162,10 @@ def ingest_email(
               help="File or directory of .txt/.md/.pdf documents.")
 @click.option("--collection", default=None,
               help="Override the ChromaDB collection name. Default: 'documents'.")
+@click.option("--fresh", is_flag=True,
+              help="Drop the existing collection before ingesting (full re-index).")
 @click.pass_context
-def ingest_text(ctx: click.Context, path: str, collection: str | None) -> None:
+def ingest_text(ctx: click.Context, path: str, collection: str | None, fresh: bool) -> None:
     """Ingest .txt / .md / .pdf documents from a file or directory."""
     debug = ctx.obj.get("debug", False)
     try:
@@ -134,7 +173,7 @@ def ingest_text(ctx: click.Context, path: str, collection: str | None) -> None:
         from sources.text import TextSource
 
         pipeline = RAGPipeline(TextSource(), collection_name=collection)
-        count = pipeline.ingest(path=path)
+        count = pipeline.ingest(path=path, fresh=fresh)
         click.echo(
             f"Ingested {count} new document chunk-source(s) into "
             f"'{pipeline.collection_name}'."
@@ -176,23 +215,48 @@ def query_cmd(
 
         source_factory = EmailSource if collection == "emails" else TextSource
         pipeline = RAGPipeline(source_factory(), collection_name=collection)
-        response = pipeline.query(question, top_k=top_k)
+
+        llm_label = (
+            f"{config.OLLAMA_LLM_MODEL} via ollama"
+            if config.LLM_SOURCE == "ollama"
+            else config.DEFAULT_LLM_MODEL
+        )
+        click.echo(
+            f"[query] Retrieving top-{top_k} chunk(s) from '{collection}'...",
+            err=True,
+        )
+        response = pipeline.query_stream(question, top_k=top_k)
+
+        # source_nodes are available immediately after retrieval (before generation)
+        source_nodes = getattr(response, "source_nodes", []) or []
+        click.echo(
+            f"[query] Generating answer with {llm_label}...", err=True
+        )
 
         click.echo("\nAnswer:\n")
-        click.echo(response.answer.strip() or "(no answer generated)")
+        answer_text = ""
+        for token in response.response_gen:
+            click.echo(token, nl=False)
+            sys.stdout.flush()
+            answer_text += token
+        click.echo()  # final newline
 
-        if show_sources and response.sources:
+        if not answer_text.strip():
+            click.echo("(no answer generated)")
+
+        if show_sources and source_nodes:
             click.echo("\nSources:")
-            for i, src in enumerate(response.sources, 1):
-                score = src.get("score")
+            for i, node in enumerate(source_nodes, 1):
+                meta = node.metadata or {}
+                score = getattr(node, "score", None)
                 score_s = f" (score={score:.3f})" if isinstance(score, float) else ""
-                if src.get("source_type") == "email":
+                if meta.get("source_type") == "email":
                     click.echo(
-                        f"  [{i}]{score_s} {src.get('subject', '(no subject)')} "
-                        f"— {src.get('from_addr', '')} — {src.get('date', '')}"
+                        f"  [{i}]{score_s} {meta.get('subject', '(no subject)')} "
+                        f"— {meta.get('from_addr', '')} — {meta.get('date', '')}"
                     )
                 else:
-                    label = src.get("file_path") or src.get("message_id") or "unknown"
+                    label = meta.get("file_path") or meta.get("message_id") or "unknown"
                     click.echo(f"  [{i}]{score_s} {label}")
 
     except ConfigError as exc:

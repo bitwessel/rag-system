@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 VectorBackendName = Literal["chroma", "pinecone", "weaviate"]
+LLMSourceName = Literal["openrouter", "ollama"]
 
 OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
@@ -24,7 +25,7 @@ VECTOR_BACKEND: VectorBackendName = os.getenv("VECTOR_BACKEND", "chroma").lower(
 
 CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
 
-DEFAULT_LLM_MODEL: str = os.getenv("DEFAULT_LLM_MODEL", "anthropic/claude-opus-4-7")
+DEFAULT_LLM_MODEL: str = os.getenv("DEFAULT_LLM_MODEL", "anthropic/claude-sonnet-4-6")
 DEFAULT_EMBED_MODEL: str = os.getenv(
     "DEFAULT_EMBED_MODEL", "openai/text-embedding-3-large"
 )
@@ -32,8 +33,23 @@ DEFAULT_MULTIMODAL_EMBED_MODEL: str = os.getenv(
     "DEFAULT_MULTIMODAL_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2"
 )
 
+# Local inference via Ollama (set LLM_SOURCE=ollama and/or EMBED_SOURCE=ollama)
+LLM_SOURCE: LLMSourceName = os.getenv("LLM_SOURCE", "openrouter").lower()  # type: ignore[assignment]
+EMBED_SOURCE: LLMSourceName = os.getenv("EMBED_SOURCE", "openrouter").lower()  # type: ignore[assignment]
+OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_LLM_MODEL: str = os.getenv("OLLAMA_LLM_MODEL", "llama3.2")
+OLLAMA_EMBED_MODEL: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+
 CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "64"))
+
+# Ingestion tuning — lower INGEST_BATCH_SIZE or raise EMBED_BATCH_DELAY when hitting rate limits
+INGEST_BATCH_SIZE: int = int(os.getenv("INGEST_BATCH_SIZE", "50"))
+EMBED_RETRY_MAX: int = int(os.getenv("EMBED_RETRY_MAX", "5"))
+EMBED_RETRY_BASE_DELAY: float = float(os.getenv("EMBED_RETRY_BASE_DELAY", "2.0"))
+EMBED_BATCH_DELAY: float = float(os.getenv("EMBED_BATCH_DELAY", "0.0"))
+EMBED_CONCURRENCY: int = int(os.getenv("EMBED_CONCURRENCY", "4"))
+NODE_CACHE_PATH: str = os.getenv("NODE_CACHE_PATH", "./data/node_cache.pkl")
 
 HTTP_REFERER: str = os.getenv(
     "OPENROUTER_HTTP_REFERER", "https://github.com/BitWessel/rag-system"
@@ -61,7 +77,8 @@ def require_openrouter_key() -> str:
     if not OPENROUTER_API_KEY:
         raise ConfigError(
             "OPENROUTER_API_KEY is not set. Copy .env.example to .env and fill in "
-            "your OpenRouter key (https://openrouter.ai/keys)."
+            "your OpenRouter key (https://openrouter.ai/keys). "
+            "Alternatively, set LLM_SOURCE=ollama and EMBED_SOURCE=ollama to run fully locally."
         )
     return OPENROUTER_API_KEY
 
