@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nexus</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; background: #0a0a0a; }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1a3a2a; border-radius: 2px; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes pulse-border {
+    0%,100% { box-shadow: 0 0 0 0 rgba(57,255,20,0); border-color: #004225; }
+    50% { box-shadow: 0 0 8px 1px rgba(57,255,20,0.15); border-color: #39ff14; }
+  }
+  @keyframes glow-pulse {
+    0%,100% { text-shadow: 0 0 6px #39ff14, 0 0 12px rgba(57,255,20,0.4); }
+    50% { text-shadow: 0 0 10px #39ff14, 0 0 20px rgba(57,255,20,0.7); }
+  }
+
+  .cursor-blink { animation: blink 1.2s ease-in-out infinite; }
+  .fade-in { animation: fadeIn 0.25s ease-out forwards; }
+  .scanlines-overlay {
+    position: fixed; inset: 0; pointer-events: none; z-index: 9998;
+    background: repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(0,0,0,0.035) 1px, rgba(0,0,0,0.035) 2px);
+  }
+  .phosphor-cursor {
+    display: inline-block;
+    color: #39ff14;
+    animation: blink 0.8s ease-in-out infinite, glow-pulse 0.8s ease-in-out infinite;
+    font-weight: 400;
+  }
+  .glass-input {
+    background: rgba(0, 66, 37, 0.06);
+    backdrop-filter: blur(12px);
+    border: 1px solid #004225;
+    transition: border-color 0.2s ease-out, box-shadow 0.2s ease-out;
+  }
+  .glass-input:focus-within {
+    border-color: rgba(57,255,20,0.5);
+    box-shadow: 0 0 0 1px rgba(57,255,20,0.08), 0 0 16px rgba(57,255,20,0.06);
+    animation: pulse-border 2s ease-in-out infinite;
+  }
+  .sidebar-item:hover { background: rgba(0,66,37,0.15); }
+  .sidebar-item.active { background: rgba(0,66,37,0.25); }
+  .chip { transition: background 0.2s ease-out, border-color 0.2s ease-out; }
+  .chip:hover { background: rgba(0,66,37,0.3); border-color: rgba(57,255,20,0.3); }
+  textarea { resize: none; outline: none; }
+  select { outline: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<canvas id="starfield" style="position:fixed;inset:0;pointer-events:none;z-index:0;opacity:0.45;"></canvas>
+
+<script>
+(function(){
+  const c = document.getElementById('starfield');
+  const ctx = c.getContext('2d');
+  let stars = [];
+  function resize(){ c.width=innerWidth; c.height=innerHeight; }
+  resize(); window.addEventListener('resize', resize);
+  for(let i=0;i<120;i++){
+    stars.push({
+      x: Math.random()*innerWidth,
+      y: Math.random()*innerHeight,
+      r: Math.random()*0.8+0.2,
+      o: Math.random()*0.4+0.1,
+      s: (Math.random()-0.5)*0.015,
+      dy: Math.random()*0.03+0.005
+    });
+  }
+  function draw(){
+    ctx.clearRect(0,0,c.width,c.height);
+    stars.forEach(s=>{
+      ctx.beginPath();
+      ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      ctx.fillStyle=`rgba(57,255,20,${s.o})`;
+      ctx.fill();
+      s.y += s.dy;
+      s.x += s.s;
+      if(s.y>c.height){s.y=0;s.x=Math.random()*c.width;}
+      if(s.x<0)s.x=c.width; if(s.x>c.width)s.x=0;
+    });
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+</script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function capFirst(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function nowTS() {
+  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+function normalizeSource(src, idx) {
+  return {
+    id: idx + 1,
+    score: typeof src.score === 'number' ? src.score : 0,
+    label: src.subject || src.file_path || src.message_id || `Source ${idx + 1}`,
+    meta: src.from_addr || (src.file_path ? src.file_path.split(/[\\/]/).pop() : '') || '',
+    date: src.date || '',
+    snippet: src.text || '',
+  };
+}
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+
+const DEFAULT_SOURCES = ['emails', 'documents', 'images', 'slack', 'confluence'];
+
+function newConvId() { return 'c' + Date.now(); }
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+const IconSend = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+  </svg>
+);
+const IconPlus = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+);
+const IconChevron = ({ dir = 'down', size = 12 }) => {
+  const r = dir === 'up' ? 'rotate(180deg)' : dir === 'right' ? 'rotate(-90deg)' : dir === 'left' ? 'rotate(90deg)' : 'rotate(0)';
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{transform:r,transition:'transform 0.2s ease-out'}}>
+      <polyline points="6 9 12 15 18 9"/>
+    </svg>
+  );
+};
+const IconDatabase = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+  </svg>
+);
+const IconMenu = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+  </svg>
+);
+const IconSliders = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+  </svg>
+);
+
+// ── Components ────────────────────────────────────────────────────────────────
+
+function SourceRow({ source }) {
+  const [hovered, setHovered] = useState(false);
+  const pct = Math.round(source.score * 100);
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        borderBottom: '1px solid rgba(0,66,37,0.2)',
+        padding: '8px 10px',
+        cursor: 'default',
+        transition: 'background 0.15s ease-out',
+        background: hovered ? 'rgba(0,66,37,0.12)' : 'transparent',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <span style={{
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 10,
+            color: source.score > 0.9 ? '#39ff14' : source.score > 0.85 ? '#a8d5a8' : '#5C8C6E',
+            letterSpacing: '0.05em',
+            flexShrink: 0,
+          }}>{pct}%</span>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#C8E8C8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {source.label}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexShrink: 0, alignItems: 'center' }}>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#5C8C6E' }}>{source.meta}</span>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a5a4a' }}>{source.date}</span>
+        </div>
+      </div>
+      {hovered && source.snippet && (
+        <div style={{
+          marginTop: 6,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 11,
+          color: '#5C8C6E',
+          lineHeight: 1.6,
+          fontStyle: 'italic',
+          paddingLeft: 28,
+          animation: 'fadeIn 0.15s ease-out forwards',
+        }}>
+          "{source.snippet}"
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SourcesPanel({ sources }) {
+  const [open, setOpen] = useState(false);
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: '#5C8C6E', fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase',
+          padding: '3px 0', transition: 'color 0.2s ease-out',
+        }}
+        onMouseEnter={e => e.currentTarget.style.color = '#39ff14'}
+        onMouseLeave={e => e.currentTarget.style.color = '#5C8C6E'}
+      >
+        <IconChevron dir={open ? 'up' : 'down'} size={10} />
+        {sources.length} source{sources.length !== 1 ? 's' : ''} retrieved
+      </button>
+      {open && (
+        <div style={{
+          marginTop: 6,
+          border: '1px solid rgba(0,66,37,0.3)',
+          borderRadius: 4,
+          overflow: 'hidden',
+          animation: 'fadeIn 0.2s ease-out forwards',
+        }}>
+          {sources.map(s => <SourceRow key={s.id} source={s} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssistantMessage({ msg }) {
+  return (
+    <div style={{ animation: 'fadeIn 0.25s ease-out forwards' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#39ff14', letterSpacing: '0.1em', textTransform: 'uppercase' }}>nexus</span>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#2a4a3a' }}>{msg.ts}</span>
+      </div>
+      <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 13.5, color: '#D8F0D8', lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>
+        {msg.content}
+        {msg.streaming && <span className="phosphor-cursor">▮</span>}
+      </div>
+      {!msg.streaming && <SourcesPanel sources={msg.sources} />}
+    </div>
+  );
+}
+
+function UserMessage({ msg }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', animation: 'fadeIn 0.2s ease-out forwards' }}>
+      <div style={{
+        maxWidth: '72%',
+        background: 'rgba(0,66,37,0.22)',
+        border: '1px solid rgba(0,66,37,0.45)',
+        borderRadius: '6px 6px 1px 6px',
+        padding: '10px 14px',
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: 13,
+        color: '#C8E8C8',
+        lineHeight: 1.6,
+      }}>
+        {msg.content}
+        <div style={{ marginTop: 4, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', letterSpacing: '0.05em' }}>{msg.ts}</div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ collapsed, activeSource, onSourceChange, conversations, activeConvId, onConvSelect, onNewSession, availableSources }) {
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const sourceRef = useRef(null);
+
+  useEffect(() => {
+    function handler(e) {
+      if (sourceRef.current && !sourceRef.current.contains(e.target)) setSourceOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  if (collapsed) return null;
+
+  return (
+    <div style={{
+      width: 260,
+      flexShrink: 0,
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      borderRight: '1px solid rgba(0,66,37,0.25)',
+      background: 'rgba(10,10,10,0.85)',
+      position: 'relative',
+      zIndex: 10,
+    }}>
+      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(0,66,37,0.15)' }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 17, fontWeight: 600, letterSpacing: '0.25em', color: '#39ff14', textShadow: '0 0 20px rgba(57,255,20,0.35)' }}>NEXUS</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', letterSpacing: '0.15em', marginTop: 2 }}>RETRIEVAL INTERFACE v2.4</div>
+      </div>
+
+      <div style={{ padding: '12px 14px' }}>
+        <button
+          onClick={onNewSession}
+          style={{
+            width: '100%',
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: 'rgba(0,66,37,0.15)',
+            border: '1px solid rgba(0,66,37,0.4)',
+            borderRadius: 4,
+            padding: '8px 12px',
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 11,
+            color: '#7ab87a',
+            cursor: 'pointer',
+            letterSpacing: '0.05em',
+            transition: 'all 0.2s ease-out',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,66,37,0.3)'; e.currentTarget.style.color = '#39ff14'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(0,66,37,0.15)'; e.currentTarget.style.color = '#7ab87a'; }}
+        >
+          <IconPlus /> new session
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto', padding: '4px 8px' }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', letterSpacing: '0.12em', padding: '6px 8px 4px', textTransform: 'uppercase' }}>recent</div>
+        {conversations.map(c => (
+          <div
+            key={c.id}
+            className={`sidebar-item${c.id === activeConvId ? ' active' : ''}`}
+            onClick={() => onConvSelect(c.id)}
+            style={{ padding: '8px 10px', borderRadius: 4, cursor: 'pointer', marginBottom: 1, transition: 'background 0.15s ease-out' }}
+          >
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: c.id === activeConvId ? '#C8E8C8' : '#5C8C6E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {c.id === activeConvId && <span style={{ color: '#39ff14', marginRight: 6 }}>▸</span>}
+              {c.title}
+            </div>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', marginTop: 2 }}>{c.time}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: '12px 14px 16px', borderTop: '1px solid rgba(0,66,37,0.15)' }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>data source</div>
+        <div ref={sourceRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setSourceOpen(o => !o)}
+            style={{
+              width: '100%',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: 'rgba(0,66,37,0.1)',
+              border: '1px solid rgba(0,66,37,0.3)',
+              borderRadius: 4,
+              padding: '7px 10px',
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              color: '#7ab87a',
+              cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <IconDatabase />{capFirst(activeSource)}
+            </span>
+            <IconChevron dir={sourceOpen ? 'up' : 'down'} size={10} />
+          </button>
+          {sourceOpen && (
+            <div style={{
+              position: 'absolute', bottom: '110%', left: 0, right: 0,
+              background: '#0d1a12',
+              border: '1px solid rgba(0,66,37,0.4)',
+              borderRadius: 4,
+              overflow: 'hidden',
+              animation: 'fadeIn 0.15s ease-out forwards',
+              zIndex: 100,
+            }}>
+              {availableSources.map(src => (
+                <div
+                  key={src}
+                  onClick={() => { onSourceChange(src); setSourceOpen(false); }}
+                  style={{
+                    padding: '8px 12px',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11,
+                    color: src === activeSource ? '#39ff14' : '#5C8C6E',
+                    cursor: 'pointer',
+                    background: src === activeSource ? 'rgba(0,66,37,0.2)' : 'transparent',
+                    transition: 'all 0.15s ease-out',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}
+                  onMouseEnter={e => { if(src !== activeSource) e.currentTarget.style.background = 'rgba(0,66,37,0.15)'; }}
+                  onMouseLeave={e => { if(src !== activeSource) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {src === activeSource && <span style={{ color: '#39ff14', fontSize: 9 }}>●</span>}
+                  {src !== activeSource && <span style={{ width: 9 }} />}
+                  {capFirst(src)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChipModal({ chip, onClose, onApply }) {
+  const [val, setVal] = useState(chip.value);
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 120 }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#0d1a12',
+          border: '1px solid rgba(0,66,37,0.5)',
+          borderRadius: 6,
+          padding: '16px 20px',
+          minWidth: 220,
+          animation: 'fadeIn 0.15s ease-out forwards',
+          boxShadow: '0 0 40px rgba(0,0,0,0.8)',
+        }}
+      >
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#39ff14', letterSpacing: '0.1em', marginBottom: 12, textTransform: 'uppercase' }}>
+          {chip.label}
+        </div>
+        {chip.type === 'number' ? (
+          <div>
+            <input
+              type="range" min={1} max={20} value={val}
+              onChange={e => setVal(Number(e.target.value))}
+              style={{ width: '100%', accentColor: '#39ff14', marginBottom: 8 }}
+            />
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, color: '#C8E8C8', textAlign: 'center' }}>{val}</div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {chip.options.map(o => (
+              <div key={o} onClick={() => setVal(o)} style={{
+                padding: '6px 10px', borderRadius: 3,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                color: val === o ? '#39ff14' : '#5C8C6E',
+                background: val === o ? 'rgba(0,66,37,0.25)' : 'transparent',
+                cursor: 'pointer', transition: 'all 0.15s',
+              }}>{val === o && '● '}{capFirst(o)}</div>
+            ))}
+          </div>
+        )}
+        <button
+          onClick={() => { onApply(val); onClose(); }}
+          style={{
+            marginTop: 12, width: '100%',
+            background: 'rgba(0,66,37,0.4)', border: '1px solid rgba(57,255,20,0.3)',
+            borderRadius: 3, padding: '6px', fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 10, color: '#39ff14', cursor: 'pointer', letterSpacing: '0.08em',
+          }}
+        >apply</button>
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [initId] = useState(newConvId);
+  const [conversations, setConversations] = useState(() => [
+    { id: initId, title: 'New session', time: 'now' }
+  ]);
+  const [activeConvId, setActiveConvId] = useState(initId);
+  const [sessionMessages, setSessionMessages] = useState(() => ({ [initId]: [] }));
+  const activeConvIdRef = useRef(initId);
+  useEffect(() => { activeConvIdRef.current = activeConvId; }, [activeConvId]);
+  const messages = sessionMessages[activeConvId] || [];
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [availableSources, setAvailableSources] = useState(DEFAULT_SOURCES);
+  const [activeSource, setActiveSource] = useState(DEFAULT_SOURCES[0]);
+  const [topK, setTopK] = useState(5);
+  const [scanlines, setScanlines] = useState(true);
+  const [activeChip, setActiveChip] = useState(null);
+  const [tweaksOpen, setTweaksOpen] = useState(false);
+  const inputRef = useRef(null);
+  const bottomRef = useRef(null);
+
+  // Fetch real collections from the backend
+  useEffect(() => {
+    fetch('/api/collections')
+      .then(r => r.json())
+      .then(data => {
+        if (data.collections && data.collections.length > 0) {
+          setAvailableSources(data.collections);
+          setActiveSource(data.collections[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [messages, streaming]);
+
+  const newSession = useCallback(() => {
+    const id = newConvId();
+    setConversations(prev => [{ id, title: 'New session', time: 'now' }, ...prev]);
+    setActiveConvId(id);
+    setSessionMessages(prev => ({ ...prev, [id]: [] }));
+  }, []);
+
+  useEffect(() => {
+    function handler(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  useEffect(() => {
+    function handleMsg(e) {
+      if (e.data?.type === '__activate_edit_mode') setTweaksOpen(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksOpen(false);
+    }
+    window.addEventListener('message', handleMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', handleMsg);
+  }, []);
+
+  const sendMessage = useCallback(async () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setInput('');
+
+    const convId = activeConvIdRef.current;
+    const userMsg = { id: Date.now(), role: 'user', content: text, ts: nowTS() };
+    const assistantId = Date.now() + 1;
+    const assistantMsg = { id: assistantId, role: 'assistant', content: '', ts: nowTS(), sources: [], streaming: true };
+
+    setSessionMessages(prev => ({
+      ...prev,
+      [convId]: [...(prev[convId] || []), userMsg, assistantMsg],
+    }));
+
+    // Use first message as session title
+    setConversations(prev => prev.map(c =>
+      c.id === convId && c.title === 'New session'
+        ? { ...c, title: text.length > 38 ? text.slice(0, 38) + '…' : text, time: nowTS() }
+        : c
+    ));
+
+    setStreaming(true);
+
+    try {
+      const res = await fetch('/api/query/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: text, collection: activeSource, top_k: topK }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'sources') {
+              const normalized = (event.sources || []).map(normalizeSource);
+              setSessionMessages(prev => ({
+                ...prev,
+                [convId]: (prev[convId] || []).map(m => m.id === assistantId ? { ...m, sources: normalized } : m),
+              }));
+            } else if (event.type === 'token') {
+              setSessionMessages(prev => ({
+                ...prev,
+                [convId]: (prev[convId] || []).map(m => m.id === assistantId ? { ...m, content: m.content + event.text } : m),
+              }));
+            } else if (event.type === 'done') {
+              setSessionMessages(prev => ({
+                ...prev,
+                [convId]: (prev[convId] || []).map(m => m.id === assistantId ? { ...m, streaming: false } : m),
+              }));
+              setStreaming(false);
+            } else if (event.type === 'error') {
+              setSessionMessages(prev => ({
+                ...prev,
+                [convId]: (prev[convId] || []).map(m => m.id === assistantId ? { ...m, content: `Error: ${event.message}`, streaming: false } : m),
+              }));
+              setStreaming(false);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (err) {
+      setSessionMessages(prev => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map(m => m.id === assistantId ? { ...m, content: `Connection error: ${err.message}`, streaming: false } : m),
+      }));
+      setStreaming(false);
+    }
+  }, [input, streaming, activeSource, topK]);
+
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }, [sendMessage]);
+
+  const isEmpty = messages.length === 0;
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', background: '#0a0a0a', position: 'relative', zIndex: 1, fontFamily: 'JetBrains Mono, monospace' }}>
+      {scanlines && <div className="scanlines-overlay" />}
+
+      {tweaksOpen && (
+        <div style={{
+          position: 'fixed', bottom: 80, right: 20, zIndex: 9999,
+          background: '#0d1a12', border: '1px solid rgba(0,66,37,0.5)',
+          borderRadius: 6, padding: 16, width: 200,
+          boxShadow: '0 0 40px rgba(0,0,0,0.8)',
+          animation: 'fadeIn 0.2s ease-out forwards',
+        }}>
+          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#39ff14', letterSpacing: '0.1em', marginBottom: 12 }}>TWEAKS</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#5C8C6E' }}>Scanlines</span>
+            <button onClick={() => setScanlines(s => !s)} style={{
+              width: 34, height: 18, borderRadius: 9, border: 'none', cursor: 'pointer',
+              background: scanlines ? 'rgba(57,255,20,0.4)' : 'rgba(0,66,37,0.3)',
+              position: 'relative', transition: 'background 0.2s',
+            }}>
+              <span style={{
+                position: 'absolute', top: 2, left: scanlines ? 18 : 2, width: 14, height: 14,
+                borderRadius: '50%', background: scanlines ? '#39ff14' : '#5C8C6E',
+                transition: 'left 0.2s', display: 'block',
+              }} />
+            </button>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#5C8C6E', marginBottom: 4 }}>Top-K: {topK}</div>
+            <input type="range" min={1} max={20} value={topK} onChange={e => setTopK(Number(e.target.value))}
+              style={{ width: '100%', accentColor: '#39ff14' }} />
+          </div>
+          <div>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#5C8C6E', marginBottom: 6 }}>Sidebar</div>
+            <button onClick={() => setSidebarOpen(s => !s)} style={{
+              width: '100%', padding: '5px', background: 'rgba(0,66,37,0.2)',
+              border: '1px solid rgba(0,66,37,0.3)', borderRadius: 3,
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#7ab87a', cursor: 'pointer',
+            }}>{sidebarOpen ? 'collapse' : 'expand'}</button>
+          </div>
+        </div>
+      )}
+
+      {activeChip && (
+        <ChipModal
+          chip={activeChip}
+          onClose={() => setActiveChip(null)}
+          onApply={(val) => {
+            if (activeChip.id === 'topk') setTopK(val);
+            if (activeChip.id === 'collection') setActiveSource(val);
+          }}
+        />
+      )}
+
+      <Sidebar
+        collapsed={!sidebarOpen}
+        activeSource={activeSource}
+        onSourceChange={setActiveSource}
+        conversations={conversations}
+        activeConvId={activeConvId}
+        onConvSelect={setActiveConvId}
+        onNewSession={newSession}
+        availableSources={availableSources}
+      />
+
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+        <div style={{
+          height: 48, display: 'flex', alignItems: 'center', gap: 12,
+          padding: '0 20px',
+          borderBottom: '1px solid rgba(0,66,37,0.15)',
+          background: 'rgba(10,10,10,0.8)',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={() => setSidebarOpen(o => !o)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3a5a4a', padding: 4, transition: 'color 0.2s' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#39ff14'}
+            onMouseLeave={e => e.currentTarget.style.color = '#3a5a4a'}
+          >
+            <IconMenu />
+          </button>
+          {!sidebarOpen && (
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 600, letterSpacing: '0.2em', color: '#39ff14', textShadow: '0 0 12px rgba(57,255,20,0.3)' }}>
+              NEXUS
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={() => setScanlines(s => !s)}
+            style={{
+              background: 'none', border: '1px solid rgba(0,66,37,0.25)', borderRadius: 3,
+              padding: '3px 8px', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 9, letterSpacing: '0.08em',
+              color: scanlines ? '#39ff14' : '#3a5a4a',
+              transition: 'all 0.2s',
+            }}
+            title="Toggle scanlines"
+          >
+            CRT
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflow: 'auto', padding: '32px 20px 16px' }}>
+          <div style={{ maxWidth: 768, margin: '0 auto' }}>
+            {isEmpty ? (
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingTop: '20vh' }}>
+                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 36, color: '#39ff14', animation: 'blink 1.2s ease-in-out infinite', textShadow: '0 0 20px rgba(57,255,20,0.5)', marginBottom: 20 }}>▮</div>
+                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 14, color: '#2a4a3a', letterSpacing: '0.15em' }}>Ask the archive.</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+                {messages.map((msg) => (
+                  <div key={msg.id}>
+                    {msg.role === 'user' ? <UserMessage msg={msg} /> : <AssistantMessage msg={msg} />}
+                  </div>
+                ))}
+                <div ref={bottomRef} style={{ height: 8 }} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 20px 20px', background: 'rgba(10,10,10,0.9)', borderTop: '1px solid rgba(0,66,37,0.12)', flexShrink: 0 }}>
+          <div style={{ maxWidth: 768, margin: '0 auto' }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+              <button
+                className="chip"
+                onClick={() => setActiveChip({ id: 'topk', label: 'Top-K Results', type: 'number', value: topK })}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  background: 'rgba(0,66,37,0.12)', border: '1px solid rgba(0,66,37,0.3)',
+                  borderRadius: 3, padding: '3px 9px',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                  color: '#5C8C6E', cursor: 'pointer', letterSpacing: '0.05em',
+                }}
+              >
+                <IconSliders /> top-k: {topK}
+              </button>
+              <button
+                className="chip"
+                onClick={() => setActiveChip({ id: 'collection', label: 'Collection', type: 'select', value: activeSource, options: availableSources })}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  background: 'rgba(0,66,37,0.12)', border: '1px solid rgba(0,66,37,0.3)',
+                  borderRadius: 3, padding: '3px 9px',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                  color: '#5C8C6E', cursor: 'pointer', letterSpacing: '0.05em',
+                }}
+              >
+                <IconDatabase /> {capFirst(activeSource)}
+              </button>
+            </div>
+
+            <div className="glass-input" style={{ borderRadius: 6, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '10px 12px' }}>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Query the archive… (⌘K)"
+                rows={1}
+                style={{
+                  flex: 1,
+                  background: 'none',
+                  border: 'none',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 13,
+                  color: '#C8E8C8',
+                  lineHeight: 1.6,
+                  maxHeight: 160,
+                  overflow: 'auto',
+                  caretColor: '#39ff14',
+                }}
+                onInput={e => {
+                  e.target.style.height = 'auto';
+                  e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+                }}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!input.trim() || streaming}
+                style={{
+                  width: 32, height: 32, borderRadius: 4, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: input.trim() && !streaming ? 'rgba(57,255,20,0.15)' : 'rgba(0,66,37,0.08)',
+                  border: `1px solid ${input.trim() && !streaming ? 'rgba(57,255,20,0.4)' : 'rgba(0,66,37,0.2)'}`,
+                  cursor: input.trim() && !streaming ? 'pointer' : 'default',
+                  color: input.trim() && !streaming ? '#39ff14' : '#2a4a3a',
+                  transition: 'all 0.2s ease-out',
+                  boxShadow: input.trim() && !streaming ? '0 0 8px rgba(57,255,20,0.1)' : 'none',
+                }}
+              >
+                {streaming
+                  ? <span style={{ width: 10, height: 10, borderRadius: '50%', border: '1.5px solid #39ff14', borderTopColor: 'transparent', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                  : <IconSend />
+                }
+              </button>
+            </div>
+            <div style={{ marginTop: 6, fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#1a3a2a', letterSpacing: '0.06em', textAlign: 'center' }}>
+              enter to send · shift+enter for newline · ⌘K to focus
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        textarea::placeholder { color: #2a4a3a; }
+        input[type=range] { height: 3px; }
+      `}</style>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

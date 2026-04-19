@@ -128,11 +128,17 @@ class RAGPipeline:
                 return 0
 
             tqdm.write(f"[pipeline] Splitting {len(new_docs)} document(s) into chunks...")
+            doc_meta_by_id = {d.doc_id: (d.metadata or {}) for d in new_docs}
             nodes = self._splitter.get_nodes_from_documents(new_docs)
             for node in nodes:
                 parent = node.ref_doc_id
-                if parent:
-                    node.metadata = {**(node.metadata or {}), "doc_id": parent}
+                parent_meta = doc_meta_by_id.get(parent, {}) if parent else {}
+                existing = node.metadata or {}
+                node.metadata = {
+                    **parent_meta,
+                    **existing,
+                    "doc_id": parent or existing.get("doc_id", ""),
+                }
             tqdm.write(f"[pipeline] {len(nodes)} chunk(s) to embed and index")
 
             new_doc_count = len(new_docs)
@@ -153,13 +159,10 @@ class RAGPipeline:
         embed_start = time.monotonic()
         completed = 0
         failed = 0
-        # 400 chars at ~3 chars/BERT-token worst-case ≈ 133 tokens, safely under
-        # all-minilm's 256-token limit regardless of language or text density.
-        _MAX = 400
         with tqdm(total=len(nodes), desc="Embedding chunks", unit="chunk") as pbar:
             with ThreadPoolExecutor(max_workers=config.EMBED_CONCURRENCY) as executor:
                 future_to_idx = {
-                    executor.submit(self.embed_model.get_text_embedding, text[:_MAX]): idx
+                    executor.submit(self.embed_model.get_text_embedding, text): idx
                     for idx, text in enumerate(texts)
                 }
                 for future in as_completed(future_to_idx):
