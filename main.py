@@ -186,6 +186,40 @@ def ingest_text(ctx: click.Context, path: str, collection: str | None, fresh: bo
         _die(f"{type(exc).__name__}: {exc}", debug=debug)
 
 
+@ingest.command("paulgraham")
+@click.option("--limit", type=int, default=None,
+              help="Max essays to fetch (first N from index). Omit for all ~220.")
+@click.option("--collection", default=None,
+              help="Override ChromaDB collection name. Default: 'paulgraham'.")
+@click.option("--fresh", is_flag=True,
+              help="Drop existing collection before ingesting.")
+@click.option("--refresh", is_flag=True,
+              help="Re-download essays even if already cached in ./data/paulgraham/.")
+@click.pass_context
+def ingest_paulgraham(
+    ctx: click.Context,
+    limit: int | None,
+    collection: str | None,
+    fresh: bool,
+    refresh: bool,
+) -> None:
+    """Ingest Paul Graham essays scraped from paulgraham.com (cached locally)."""
+    debug = ctx.obj.get("debug", False)
+    try:
+        from core.pipeline import RAGPipeline
+        from sources.paulgraham import PaulGrahamSource
+
+        pipeline = RAGPipeline(PaulGrahamSource(), collection_name=collection)
+        count = pipeline.ingest(limit=limit, refresh=refresh, fresh=fresh)
+        click.echo(f"Ingested {count} new essay(s) into '{pipeline.collection_name}'.")
+    except ConfigError as exc:
+        _die(str(exc), debug=debug)
+    except NotImplementedError as exc:
+        _die(str(exc), debug=debug)
+    except Exception as exc:  # noqa: BLE001
+        _die(f"{type(exc).__name__}: {exc}", debug=debug)
+
+
 # --------------------------------------------------------------------------- #
 # query                                                                       #
 # --------------------------------------------------------------------------- #
@@ -213,8 +247,14 @@ def query_cmd(
         from sources.email import EmailSource
         from sources.text import TextSource
 
-        source_factory = EmailSource if collection == "emails" else TextSource
-        pipeline = RAGPipeline(source_factory(), collection_name=collection)
+        from sources.paulgraham import PaulGrahamSource
+        if collection.lower() in ("emails", "email"):
+            source = EmailSource()
+        elif collection.lower() in ("paulgraham", "paul_graham", "pg"):
+            source = PaulGrahamSource()
+        else:
+            source = TextSource()
+        pipeline = RAGPipeline(source, collection_name=collection)
 
         llm_label = (
             f"{config.OLLAMA_LLM_MODEL} via ollama"

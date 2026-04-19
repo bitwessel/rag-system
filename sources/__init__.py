@@ -6,7 +6,8 @@ metadata. The pipeline handles chunking, embedding, and storage.
 """
 from sources.base import DataSource
 from sources.email import EmailSource
-from sources.text import TextSource
 from sources.images import ImageSource
+from sources.paulgraham import PaulGrahamSource
+from sources.text import TextSource
 
-__all__ = ["DataSource", "EmailSource", "TextSource", "ImageSource"]
+__all__ = ["DataSource", "EmailSource", "ImageSource", "PaulGrahamSource", "TextSource"]

@@ -50,8 +50,14 @@ class QueryRequest(BaseModel):
 
 def _get_source(collection: str):
     from sources.email import EmailSource
+    from sources.paulgraham import PaulGrahamSource
     from sources.text import TextSource
-    return EmailSource() if collection.lower() in ("emails", "email") else TextSource()
+    col = collection.lower()
+    if col in ("emails", "email"):
+        return EmailSource()
+    if col in ("paulgraham", "paul_graham", "pg"):
+        return PaulGrahamSource()
+    return TextSource()
 
 
 def _extract_sources(response) -> list[dict[str, Any]]:
