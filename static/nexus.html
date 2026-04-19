@@ -163,6 +163,15 @@ const IconSliders = () => (
     <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
   </svg>
 );
+const IconCpu = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
+    <line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/>
+    <line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/>
+    <line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/>
+    <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>
+  </svg>
+);
 
 // ── Components ────────────────────────────────────────────────────────────────
 
@@ -484,6 +493,89 @@ function ChipModal({ chip, onClose, onApply }) {
   );
 }
 
+function fmtTTFT(ms, runs) {
+  if (!runs || ms == null) return '—';
+  if (ms < 1000) return '<1s';
+  return `~${Math.round(ms / 1000)}s`;
+}
+
+function ModelPickerModal({ models, defaultModel, selected, onSelect, onClose }) {
+  const activeModel = selected || defaultModel;
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 120 }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#0d1a12',
+          border: '1px solid rgba(0,66,37,0.5)',
+          borderRadius: 6,
+          minWidth: 340,
+          maxHeight: 360,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'fadeIn 0.15s ease-out forwards',
+          boxShadow: '0 0 40px rgba(0,0,0,0.8)',
+        }}
+      >
+        <div style={{ padding: '12px 16px 8px', borderBottom: '1px solid rgba(0,66,37,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#39ff14', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Ollama Model</span>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: '#2a4a3a', letterSpacing: '0.05em' }}>size · first token avg</span>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '6px 0' }}>
+          {models.map(m => {
+            const isActive = m.name === activeModel;
+            const ttft = fmtTTFT(m.avg_ttft_ms, m.runs);
+            return (
+              <div
+                key={m.name}
+                onClick={() => { onSelect(m.name); onClose(); }}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '9px 16px', cursor: 'pointer',
+                  background: isActive ? 'rgba(0,66,37,0.25)' : 'transparent',
+                  transition: 'background 0.15s ease-out',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(0,66,37,0.12)'; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ color: '#39ff14', fontSize: 9, width: 8 }}>{isActive ? '●' : ''}</span>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: isActive ? '#C8E8C8' : '#7ab87a' }}>{m.name}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a5a4a' }}>{m.size_gb > 0 ? `${m.size_gb} GB` : ''}</span>
+                  <span style={{
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, minWidth: 36, textAlign: 'right',
+                    color: ttft === '—' ? '#2a4a3a' : ttft.startsWith('~') && parseInt(ttft) > 10 ? '#7a6a3a' : '#5C8C6E',
+                  }}>{ttft}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {selected && (
+          <div
+            onClick={() => { onSelect(null); onClose(); }}
+            style={{
+              padding: '8px 16px', borderTop: '1px solid rgba(0,66,37,0.15)', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a5a4a',
+              letterSpacing: '0.05em', transition: 'color 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#5C8C6E'}
+            onMouseLeave={e => e.currentTarget.style.color = '#3a5a4a'}
+          >
+            ↩ use server default ({defaultModel})
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -505,6 +597,10 @@ function App() {
   const [scanlines, setScanlines] = useState(true);
   const [activeChip, setActiveChip] = useState(null);
   const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState([]);
+  const [defaultOllamaModel, setDefaultOllamaModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState(null);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const inputRef = useRef(null);
   const bottomRef = useRef(null);
 
@@ -516,6 +612,19 @@ function App() {
         if (data.collections && data.collections.length > 0) {
           setAvailableSources(data.collections);
           setActiveSource(data.collections[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch available Ollama models
+  useEffect(() => {
+    fetch('/api/ollama/models')
+      .then(r => r.json())
+      .then(data => {
+        if (data.models && data.models.length > 0) {
+          setOllamaModels(data.models);
+          setDefaultOllamaModel(data.active || '');
         }
       })
       .catch(() => {});
@@ -583,7 +692,7 @@ function App() {
       const res = await fetch('/api/query/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, collection: activeSource, top_k: topK }),
+        body: JSON.stringify({ question: text, collection: activeSource, top_k: topK, ...(selectedModel ? { model: selectedModel } : {}) }),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -637,7 +746,7 @@ function App() {
       }));
       setStreaming(false);
     }
-  }, [input, streaming, activeSource, topK]);
+  }, [input, streaming, activeSource, topK, selectedModel]);
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -699,6 +808,16 @@ function App() {
             if (activeChip.id === 'topk') setTopK(val);
             if (activeChip.id === 'collection') setActiveSource(val);
           }}
+        />
+      )}
+
+      {showModelPicker && ollamaModels.length > 0 && (
+        <ModelPickerModal
+          models={ollamaModels}
+          defaultModel={defaultOllamaModel}
+          selected={selectedModel}
+          onSelect={setSelectedModel}
+          onClose={() => setShowModelPicker(false)}
         />
       )}
 
@@ -799,6 +918,22 @@ function App() {
               >
                 <IconDatabase /> {capFirst(activeSource)}
               </button>
+              {ollamaModels.length > 0 && (
+                <button
+                  className="chip"
+                  onClick={() => setShowModelPicker(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    background: selectedModel ? 'rgba(0,66,37,0.22)' : 'rgba(0,66,37,0.12)',
+                    border: `1px solid ${selectedModel ? 'rgba(57,255,20,0.25)' : 'rgba(0,66,37,0.3)'}`,
+                    borderRadius: 3, padding: '3px 9px',
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                    color: selectedModel ? '#a8d5a8' : '#5C8C6E', cursor: 'pointer', letterSpacing: '0.05em',
+                  }}
+                >
+                  <IconCpu /> {selectedModel || defaultOllamaModel || 'model'}
+                </button>
+              )}
             </div>
 
             <div className="glass-input" style={{ borderRadius: 6, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '10px 12px' }}>

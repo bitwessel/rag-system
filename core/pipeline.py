@@ -20,10 +20,11 @@ from core.backends import VectorBackend, build_backend
 from sources.base import DataSource
 
 
-def _build_llm() -> LLM:
+def _build_llm(model_override: str | None = None) -> LLM:
     if config.LLM_SOURCE == "ollama":
         from llama_index.llms.ollama import Ollama
-        return Ollama(model=config.OLLAMA_LLM_MODEL, base_url=config.OLLAMA_BASE_URL, request_timeout=300.0, context_window=4096)
+        model = model_override or config.OLLAMA_LLM_MODEL
+        return Ollama(model=model, base_url=config.OLLAMA_BASE_URL, request_timeout=300.0, context_window=4096)
     from core.llm import OpenRouterLLM
     return OpenRouterLLM()
 
@@ -55,6 +56,7 @@ class RAGPipeline:
         backend: VectorBackend | None = None,
         llm: LLM | None = None,
         embed_model: BaseEmbedding | None = None,
+        llm_model_override: str | None = None,
     ) -> None:
         self.source = source
         self.collection_name = collection_name or getattr(
@@ -62,7 +64,7 @@ class RAGPipeline:
         )
         self.backend: VectorBackend = backend or build_backend(config.VECTOR_BACKEND)
         self.embed_model: BaseEmbedding = embed_model or _build_embed_model()
-        self.llm: LLM = llm or _build_llm()
+        self.llm: LLM = llm or _build_llm(llm_model_override)
 
         self._vector_store = self.backend.get_vector_store(self.collection_name)
         self._storage_context = StorageContext.from_defaults(

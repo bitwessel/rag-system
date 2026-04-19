@@ -5,6 +5,7 @@ import asyncio
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +18,34 @@ import config
 app = FastAPI(title="Nexus RAG")
 
 STATIC_DIR = Path(__file__).parent / "static"
+STATS_PATH = Path("./data/model_stats.json")
+
+
+def _load_model_stats() -> dict:
+    try:
+        return json.loads(STATS_PATH.read_text()) if STATS_PATH.exists() else {}
+    except Exception:
+        return {}
+
+
+def _update_model_stats(model: str, ttft_ms: float) -> None:
+    stats = _load_model_stats()
+    s = stats.get(model, {"runs": 0, "avg_ttft_ms": 0.0})
+    runs = s["runs"] + 1
+    avg = (s["avg_ttft_ms"] * s["runs"] + ttft_ms) / runs
+    stats[model] = {"runs": runs, "avg_ttft_ms": round(avg)}
+    try:
+        STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STATS_PATH.write_text(json.dumps(stats))
+    except Exception:
+        pass
 
 
 class QueryRequest(BaseModel):
     question: str
     collection: str = "emails"
     top_k: int = 5
+    model: str | None = None
 
 
 def _get_source(collection: str):
@@ -63,14 +86,46 @@ async def list_collections() -> dict:
         return {"collections": []}
 
 
+@app.get("/api/ollama/models")
+async def list_ollama_models() -> dict:
+    import urllib.request
+    stats = _load_model_stats()
+    try:
+        url = f"{config.OLLAMA_BASE_URL}/api/tags"
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            data = json.loads(resp.read())
+        models = []
+        for m in data.get("models", []):
+            name = m.get("name", "")
+            size_bytes = m.get("size", 0)
+            s = stats.get(name, {})
+            models.append({
+                "name": name,
+                "size_gb": round(size_bytes / 1e9, 1),
+                "avg_ttft_ms": s.get("avg_ttft_ms"),
+                "runs": s.get("runs", 0),
+            })
+        return {"models": models, "active": config.OLLAMA_LLM_MODEL}
+    except Exception:
+        return {"models": [], "active": config.OLLAMA_LLM_MODEL}
+
+
 @app.post("/api/query/stream")
 async def query_stream(req: QueryRequest) -> StreamingResponse:
     async def event_generator():
+        t_start = time.monotonic()
+        first_token_seen = False
+        active_model = req.model or (config.OLLAMA_LLM_MODEL if config.LLM_SOURCE == "ollama" else None)
+
         try:
             def build_and_query():
                 from core.pipeline import RAGPipeline
                 source = _get_source(req.collection)
-                pipeline = RAGPipeline(source, collection_name=req.collection)
+                pipeline = RAGPipeline(
+                    source,
+                    collection_name=req.collection,
+                    llm_model_override=req.model,
+                )
                 return pipeline.query_stream(req.question, top_k=req.top_k)
 
             response = await asyncio.to_thread(build_and_query)
@@ -94,6 +149,14 @@ async def query_stream(req: QueryRequest) -> StreamingResponse:
                 tok = await loop.run_in_executor(None, token_q.get)
                 if tok is None:
                     break
+                if not first_token_seen and active_model and tok.strip():
+                    ttft_ms = (time.monotonic() - t_start) * 1000
+                    threading.Thread(
+                        target=_update_model_stats,
+                        args=(active_model, ttft_ms),
+                        daemon=True,
+                    ).start()
+                    first_token_seen = True
                 yield f"data: {json.dumps({'type': 'token', 'text': tok})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
